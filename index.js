@@ -80,14 +80,13 @@ async function run() {
         res.send(result);
     });
 
-  // PAYMENT CHECKOUT SESSION API
+// PAYMENT CHECKOUT SESSION API
     app.post("/create-checkout-session", async (req, res) => {
         try {
             const paymentInfo = req.body;
             const amount = parseInt(paymentInfo.cost) * 100;
             
             const session = await stripe.checkout.sessions.create({
-             
                 line_items: [
                     {
                         price_data: {
@@ -101,8 +100,12 @@ async function run() {
                     },
                 ],
                 mode: 'payment',
+                metadata: {
+                    parcelId: paymentInfo.parcelId
+                },
                 customer_email: paymentInfo.senderEmail,
-                success_url: `${process.env.SITE_DOMAIN}/dashboard/payment-success`,
+                // FIX 1: Spelling fixed (session_id and CHECKOUT_SESSION_ID)
+                success_url: `${process.env.SITE_DOMAIN}/dashboard/payment-success?session_id={CHECKOUT_SESSION_ID}`,
                 cancel_url: `${process.env.SITE_DOMAIN}/dashboard/payment-cancelled`,
             });
 
@@ -111,6 +114,45 @@ async function run() {
             
         } catch (error) {
             console.error("Stripe Error:", error);
+            res.status(500).send({ error: error.message });
+        }
+    });
+
+    // PAYMENT SUCCESS API ROUTE
+    app.patch('/payment-success', async (req, res) => {
+        try {
+           
+            const sessionId = req.query.session_id;
+            
+            if (!sessionId) {
+                return res.status(400).send({ error: "Session ID is required" });
+            }
+
+            const session = await stripe.checkout.sessions.retrieve(sessionId);
+            console.log("Retrieved Stripe Session:", session);
+
+            if (session.payment_status === 'paid') {
+          
+                const parcelId = session.metadata?.parcelId;
+                
+                if (parcelId) {
+                    const query = { _id: new ObjectId(parcelId) };
+                    const update = {
+                        $set: {
+                            paymentStatus: 'paid',
+                            transactionId: session.payment_intent 
+                        }
+                    };
+                    
+               
+                    const result = await parcelCollection.updateOne(query, update);
+                    console.log("Database Update Result:", result);
+                }
+            }
+            
+            res.send({ success: true });
+        } catch (error) {
+            console.error("Payment Success Error:", error);
             res.status(500).send({ error: error.message });
         }
     });

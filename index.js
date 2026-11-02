@@ -13,6 +13,15 @@ dns.setDefaultResultOrder('ipv4first');
 const app = express();
 const port = process.env.PORT || 5000;
 
+const crypto = require('crypto');
+
+function generateTrackingId() {
+    const prefix = 'PRCL';
+    const date = new Date().toISOString().slice(0, 10).replace(/-/g, "");
+    const random = crypto.randomBytes(3).toString("hex").toUpperCase();
+    return `${prefix}-${date}-${random}`;
+}
+
 // MIDDLEWARES
 app.use(express.json());
 app.use(cors({
@@ -36,8 +45,10 @@ async function run() {
 
     const database = client.db("SwiftDrop");
     const parcelCollection = database.collection("parcels");
+    const paymentCollection = database.collection("payments");
 
-    // PARCELS API ROUTES
+    // ================= PARCELS API ROUTES =================
+    
     app.get('/parcels', async (req, res) => {
         try {
             const { email } = req.query;
@@ -51,15 +62,27 @@ async function run() {
             const parcels = await parcelCollection.find(query).sort({ createdAt: -1 }).toArray();
             res.send(parcels);
         } catch (error) {
+            console.error("Fetch Parcels Error:", error);
             res.status(500).send({ error: "Failed to fetch parcels" });
         }
     });
 
     app.get('/parcels/:id', async (req, res) => {
-        const id = req.params.id;
-        const query = {_id: new ObjectId(id)};
-        const result = await parcelCollection.findOne(query);
-        res.send(result);
+        try {
+            const id = req.params.id;
+            if (!ObjectId.isValid(id)) {
+                return res.status(400).send({ error: "Invalid Parcel ID format" });
+            }
+            const query = { _id: new ObjectId(id) };
+            const result = await parcelCollection.findOne(query);
+            if (!result) {
+                return res.status(404).send({ error: "Parcel not found" });
+            }
+            res.send(result);
+        } catch (error) {
+            console.error("Fetch Parcel by ID Error:", error);
+            res.status(500).send({ error: "Failed to fetch parcel" });
+        }
     });
  
     app.post('/parcels', async (req, res) => {
@@ -69,18 +92,28 @@ async function run() {
             const result = await parcelCollection.insertOne(parcel);
             res.send(result);
         } catch (error) {
+            console.error("Insert Parcel Error:", error);
             res.status(500).send({ error: "Failed to insert parcel" });
         }
     });
 
     app.delete('/parcels/:id', async (req, res) => {
-        const id = req.params.id;
-        const query = {_id: new ObjectId(id)};
-        const result = await parcelCollection.deleteOne(query);
-        res.send(result);
+        try {
+            const id = req.params.id;
+            if (!ObjectId.isValid(id)) {
+                return res.status(400).send({ error: "Invalid Parcel ID format" });
+            }
+            const query = { _id: new ObjectId(id) };
+            const result = await parcelCollection.deleteOne(query);
+            res.send(result);
+        } catch (error) {
+            console.error("Delete Parcel Error:", error);
+            res.status(500).send({ error: "Failed to delete parcel" });
+        }
     });
 
-// PAYMENT CHECKOUT SESSION API
+    // ================= PAYMENT CHECKOUT SESSION API =================
+    
     app.post("/create-checkout-session", async (req, res) => {
         try {
             const paymentInfo = req.body;
@@ -101,56 +134,86 @@ async function run() {
                 ],
                 mode: 'payment',
                 metadata: {
-                    parcelId: paymentInfo.parcelId
+                    parcelId: paymentInfo.parcelId,
+                    parcelName: paymentInfo.parcelName || "Parcel Delivery"
                 },
                 customer_email: paymentInfo.senderEmail,
-                // FIX 1: Spelling fixed (session_id and CHECKOUT_SESSION_ID)
                 success_url: `${process.env.SITE_DOMAIN}/dashboard/payment-success?session_id={CHECKOUT_SESSION_ID}`,
                 cancel_url: `${process.env.SITE_DOMAIN}/dashboard/payment-cancelled`,
             });
 
-            console.log(session);
             res.send({ url: session.url });
             
         } catch (error) {
-            console.error("Stripe Error:", error);
+            console.error("Stripe Checkout Error:", error);
             res.status(500).send({ error: error.message });
         }
     });
 
-    // PAYMENT SUCCESS API ROUTE
+    // ================= PAYMENT SUCCESS API ROUTE =================
+    
     app.patch('/payment-success', async (req, res) => {
         try {
-           
             const sessionId = req.query.session_id;
             
-            if (!sessionId) {
-                return res.status(400).send({ error: "Session ID is required" });
+            if (!sessionId || sessionId === '{CHECKOUT_SESSION_ID}') {
+                return res.status(400).send({ error: "Valid Session ID is required" });
             }
 
             const session = await stripe.checkout.sessions.retrieve(sessionId);
-            console.log("Retrieved Stripe Session:", session);
+
+            const trackingId = generateTrackingId()
 
             if (session.payment_status === 'paid') {
-          
                 const parcelId = session.metadata?.parcelId;
                 
-                if (parcelId) {
-                    const query = { _id: new ObjectId(parcelId) };
-                    const update = {
-                        $set: {
-                            paymentStatus: 'paid',
-                            transactionId: session.payment_intent 
-                        }
-                    };
-                    
-               
-                    const result = await parcelCollection.updateOne(query, update);
-                    console.log("Database Update Result:", result);
+                if (!parcelId || !ObjectId.isValid(parcelId)) {
+                    return res.status(400).send({ error: "Invalid or missing parcel ID in session metadata" });
                 }
+
+                const trackingId = generateTrackingId();
+                const query = { _id: new ObjectId(parcelId) };
+                
+                // Check if already paid to avoid duplicate insertions
+                const existingParcel = await parcelCollection.findOne(query);
+                if (existingParcel && existingParcel.paymentStatus === 'paid') {
+                    return res.send({ success: true, message: "Payment already processed" });
+                }
+
+                const update = {
+                    $set: {
+                        paymentStatus: 'paid',
+                        trackingId: trackingId
+                    }
+                };
+                
+                const result = await parcelCollection.updateOne(query, update);
+                
+                const payment = {
+                    amount: session.amount_total / 100,
+                    currency: session.currency,
+                    customerEmail: session.customer_email,
+                    parcelId: parcelId,
+                    parcelName: session.metadata.parcelName,
+                    transectionId: session.payment_intent,
+                    paymentStatus: session.payment_status,
+                    payedAt: new Date(),
+                    trackingId: trackingId
+                };
+
+                const resultPayment = await paymentCollection.insertOne(payment);
+                
+                return res.send({ 
+                    success: true, 
+                    modifyParcel: result, 
+                    paymentInfo: resultPayment,
+                      trackingId:trackingId,
+                    transectionId:session.payment_intent,
+                  
+                });
             }
             
-            res.send({ success: true });
+            res.send({ success: false, message: "Payment not completed" });
         } catch (error) {
             console.error("Payment Success Error:", error);
             res.status(500).send({ error: error.message });

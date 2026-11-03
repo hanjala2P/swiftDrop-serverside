@@ -15,6 +15,15 @@ const port = process.env.PORT || 5000;
 
 const crypto = require('crypto');
 
+const admin = require("firebase-admin");
+
+const serviceAccount = require("./swift-drop169-firebase-adminsdk.json");
+
+admin.initializeApp({
+  credential: admin.credential.cert(serviceAccount)
+});
+
+
 function generateTrackingId() {
     const prefix = 'PRCL';
     const date = new Date().toISOString().slice(0, 10).replace(/-/g, "");
@@ -28,6 +37,24 @@ app.use(cors({
     origin: ['http://localhost:5173', 'http://localhost:5174'],
     credentials: true
 }));
+
+const verifyFBToken = async (req, res, next)=>{
+     const token = req.headers?.authorization
+     if(!token){
+        return res.status(401).send({message:'unauthorized access'})
+     } 
+     try {
+        const idToken = token.split(' ')[1];
+        const decoded =await admin.auth().verifyIdToken(idToken)
+        console.log(decoded)
+        req.decoded_email = decoded.email;
+        next();
+     } catch (error) {
+         return res.status(401).send({message: 'unauthorized access'})
+     }
+
+      next()
+}
 
 const uri = process.env.DATABASE_URL;
 const client = new MongoClient(uri, {
@@ -169,7 +196,7 @@ app.patch('/payment-success', async (req, res) => {
                 const paymentExist = await paymentCollection.findOne({ transectionId: transactionId });
                 if (paymentExist) {
                     return res.send({ 
-                        success: true, // success true rakha bhalo jate frontend theke handle korte subidha hoy
+                        success: true, 
                         message: 'Payment already exist', 
                         transectionId: transactionId, 
                         trackingId: paymentExist.trackingId 
@@ -237,6 +264,20 @@ app.patch('/payment-success', async (req, res) => {
         }
     });
 
+    app.get('/payment',verifyFBToken, async(req,res)=>{
+        const email = req.query.email;
+        console.log(req.headers)
+        const query ={}
+        if(email){
+            query.customerEmail = email
+            if(email !== req.decoded_email){
+                return res.status(403).send({message:'forbidden access'})
+            }
+        }
+        const cursor = paymentCollection.find(query);
+        const result = await cursor.toArray()
+        res.send(result);
+    })
   } catch (err) {
     console.error("❌ MongoDB Connection Failed:", err);
   }

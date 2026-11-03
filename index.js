@@ -15,13 +15,13 @@ const port = process.env.PORT || 5000;
 
 const crypto = require('crypto');
 
-const admin = require("firebase-admin");
+// const admin = require("firebase-admin");
 
-const serviceAccount = require("./swift-drop169-firebase-adminsdk.json");
+// const serviceAccount = require("./firebase-adminsdk.json");
 
-admin.initializeApp({
-  credential: admin.credential.cert(serviceAccount)
-});
+// admin.initializeApp({
+//   credential: admin.credential.cert(serviceAccount)
+// });
 
 
 function generateTrackingId() {

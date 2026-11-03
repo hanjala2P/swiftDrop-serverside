@@ -152,7 +152,7 @@ async function run() {
 
     // ================= PAYMENT SUCCESS API ROUTE =================
     
-    app.patch('/payment-success', async (req, res) => {
+app.patch('/payment-success', async (req, res) => {
         try {
             const sessionId = req.query.session_id;
             
@@ -162,23 +162,40 @@ async function run() {
 
             const session = await stripe.checkout.sessions.retrieve(sessionId);
 
-            const trackingId = generateTrackingId()
-
             if (session.payment_status === 'paid') {
+                const transactionId = session.payment_intent;
+
+                // 1. Check if payment already exists using transactionId
+                const paymentExist = await paymentCollection.findOne({ transectionId: transactionId });
+                if (paymentExist) {
+                    return res.send({ 
+                        success: true, // success true rakha bhalo jate frontend theke handle korte subidha hoy
+                        message: 'Payment already exist', 
+                        transectionId: transactionId, 
+                        trackingId: paymentExist.trackingId 
+                    });
+                }
+
                 const parcelId = session.metadata?.parcelId;
                 
                 if (!parcelId || !ObjectId.isValid(parcelId)) {
                     return res.status(400).send({ error: "Invalid or missing parcel ID in session metadata" });
                 }
 
-                const trackingId = generateTrackingId();
-                const query = { _id: new ObjectId(parcelId) };
-                
-                // Check if already paid to avoid duplicate insertions
-                const existingParcel = await parcelCollection.findOne(query);
+                const parcelQuery = { _id: new ObjectId(parcelId) };
+              
+                // 2. Check if parcel is already paid
+                const existingParcel = await parcelCollection.findOne(parcelQuery);
                 if (existingParcel && existingParcel.paymentStatus === 'paid') {
-                    return res.send({ success: true, message: "Payment already processed" });
+                    return res.send({ 
+                        success: true, 
+                        message: "Payment already processed",
+                        trackingId: existingParcel.trackingId 
+                    });
                 }
+
+                // Generate new tracking ID only when it's a fresh payment
+                const trackingId = generateTrackingId();
 
                 const update = {
                     $set: {
@@ -187,15 +204,16 @@ async function run() {
                     }
                 };
                 
-                const result = await parcelCollection.updateOne(query, update);
+                // 3. Update parcel with parcelQuery (not 'query')
+                const result = await parcelCollection.updateOne(parcelQuery, update);
                 
                 const payment = {
                     amount: session.amount_total / 100,
                     currency: session.currency,
                     customerEmail: session.customer_email,
                     parcelId: parcelId,
-                    parcelName: session.metadata.parcelName,
-                    transectionId: session.payment_intent,
+                    parcelName: session.metadata?.parcelName,
+                    transectionId: transactionId,
                     paymentStatus: session.payment_status,
                     payedAt: new Date(),
                     trackingId: trackingId
@@ -207,9 +225,8 @@ async function run() {
                     success: true, 
                     modifyParcel: result, 
                     paymentInfo: resultPayment,
-                      trackingId:trackingId,
-                    transectionId:session.payment_intent,
-                  
+                    trackingId: trackingId,
+                    transectionId: transactionId
                 });
             }
             

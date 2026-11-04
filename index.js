@@ -14,14 +14,16 @@ const app = express();
 const port = process.env.PORT || 5000;
 
 const crypto = require('crypto');
+const { initializeApp, cert } = require("firebase-admin/app");
+const { getAuth } = require("firebase-admin/auth");
 
-// const admin = require("firebase-admin");
+const serviceAccount = require("./firebase-adminsdk.json");
 
-// const serviceAccount = require("./firebase-adminsdk.json");
+initializeApp({
+    credential: cert(serviceAccount)
+});
 
-// admin.initializeApp({
-//   credential: admin.credential.cert(serviceAccount)
-// });
+const auth = getAuth();
 
 
 function generateTrackingId() {
@@ -38,23 +40,33 @@ app.use(cors({
     credentials: true
 }));
 
-const verifyFBToken = async (req, res, next)=>{
-     const token = req.headers?.authorization
-     if(!token){
-        return res.status(401).send({message:'unauthorized access'})
-     } 
-     try {
-        const idToken = token.split(' ')[1];
-        const decoded =await admin.auth().verifyIdToken(idToken)
-        console.log(decoded)
-        req.decoded_email = decoded.email;
-        next();
-     } catch (error) {
-         return res.status(401).send({message: 'unauthorized access'})
-     }
+const verifyFBToken = async (req, res, next) => {
+    try {
+        const authHeader = req.headers.authorization;
 
-      next()
-}
+        if (!authHeader || !authHeader.startsWith("Bearer ")) {
+            return res.status(401).send({
+                message: "Unauthorized access"
+            });
+        }
+
+        const token = authHeader.split(" ")[1];
+
+        const decoded = await auth.verifyIdToken(token);
+
+        req.decodedToken = decoded;
+        req.decoded_email = decoded.email;
+
+        next();
+
+    } catch (error) {
+        console.error("Firebase Token Error:", error.message);
+
+        return res.status(401).send({
+            message: "Invalid or expired token"
+        });
+    }
+};
 
 const uri = process.env.DATABASE_URL;
 const client = new MongoClient(uri, {
@@ -231,7 +243,7 @@ app.patch('/payment-success', async (req, res) => {
                     }
                 };
                 
-                // 3. Update parcel with parcelQuery (not 'query')
+                // 3. Update parcel with parcelQuery 
                 const result = await parcelCollection.updateOne(parcelQuery, update);
                 
                 const payment = {
@@ -242,7 +254,7 @@ app.patch('/payment-success', async (req, res) => {
                     parcelName: session.metadata?.parcelName,
                     transectionId: transactionId,
                     paymentStatus: session.payment_status,
-                    payedAt: new Date(),
+                    paidAt: new Date(),
                     trackingId: trackingId
                 };
 
@@ -274,7 +286,7 @@ app.patch('/payment-success', async (req, res) => {
                 return res.status(403).send({message:'forbidden access'})
             }
         }
-        const cursor = paymentCollection.find(query);
+        const cursor = paymentCollection.find(query).sort({paidAt:-1})
         const result = await cursor.toArray()
         res.send(result);
     })

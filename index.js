@@ -84,8 +84,84 @@ async function run() {
 
     const database = client.db("SwiftDrop");
     const parcelCollection = database.collection("parcels");
+    const userCollection = database.collection("users");
     const paymentCollection = database.collection("payments");
+    const ridersCollection = database.collection("riders");
 
+
+    // users api
+
+    app.post('/users',async(req,res)=>{
+        const user = req.body;
+        const email = user.email;
+        const role = 'user';
+        user.createdAt =new Date()
+       const userExist = await userCollection.findOne({email})
+       if(userExist){
+        return res.send({ message : 'user exist'})
+       }
+        const result = await userCollection.insertOne(user)
+        res.send(result)
+    })
+
+    // riders PI
+
+    app.post('/riders',async(req,res)=>{
+        const rider = req.body;
+        const email =rider.email;
+        // const riderExist = await ridersCollection.findOne({email})
+        // if(riderExist){
+        //     return res.send( { message : 'rider already exist'})
+        // }
+        
+        rider.status ='pending';
+        rider.createdAt=new Date()
+
+        const result = await ridersCollection.insertOne(rider);
+        res.send(result)
+
+
+    })
+
+app.get('/riders', async (req, res) => {
+        const query = {};
+        if (req.query.status) {
+            query.status = req.query.status;
+        }
+        
+        const cursor = ridersCollection.find(query).sort({ _id: -1 });
+        const result = await cursor.toArray();
+        res.send(result);
+    });
+app.patch('/riders/:id', verifyFBToken, async (req, res) => {
+    const status = req.body.status;
+    const email = req.body.email; 
+
+    const id = req.params.id;
+    const query = { _id: new ObjectId(id) };
+
+    const updatedDoc = {
+        $set: {
+            status: status
+        }
+    };
+
+    
+    const result = await ridersCollection.updateOne(query, updatedDoc);
+
+    
+    if (status === 'approved') {
+        const userQuery = { email: email };
+        const updateUser = {
+            $set: {
+                role: 'rider'
+            }
+        };
+        const userResult = await userCollection.updateOne(userQuery, updateUser);
+    }
+
+    res.send(result);
+});
     // ================= PARCELS API ROUTES =================
     
     app.get('/parcels', async (req, res) => {
@@ -276,7 +352,7 @@ app.patch('/payment-success', async (req, res) => {
         }
     });
 
-    app.get('/payment',verifyFBToken, async(req,res)=>{
+    app.get('/payments',verifyFBToken, async(req,res)=>{
         const email = req.query.email;
         console.log(req.headers)
         const query ={}

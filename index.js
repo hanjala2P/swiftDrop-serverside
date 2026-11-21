@@ -36,9 +36,42 @@ function generateTrackingId() {
 // MIDDLEWARES
 app.use(express.json());
 app.use(cors({
-    origin: ['http://localhost:5173', 'http://localhost:5174'],
+    origin: ['http://localhost:5173', 'http://localhost:5174' , 'https://swift-drop169.web.app' ],
     credentials: true
 }));
+
+const uri = process.env.DATABASE_URL;
+const client = new MongoClient(uri, {
+  serverApi: {
+    version: ServerApiVersion.v1,
+    strict: true,
+    deprecationErrors: true,
+  }
+});
+
+async function run() {
+  try {
+    await client.connect();
+    console.log("🔥 Successfully connected to MongoDB!");
+
+    const database = client.db("SwiftDrop");
+    const parcelCollection = database.collection("parcels");
+    const userCollection = database.collection("users");
+    const paymentCollection = database.collection("payments");
+    const ridersCollection = database.collection("riders");
+
+
+    
+const verifyAdmin = async (req,res,next)=>{
+    const email = req.decoded_email;
+    const query ={email};
+    const user = await userCollection.findOne(query)
+
+    if(!user || user.role !== 'admin'){
+        return res.status(403).send({message:'forbidden access'})
+    }
+    next()
+}
 
 const verifyFBToken = async (req, res, next) => {
     try {
@@ -67,32 +100,20 @@ const verifyFBToken = async (req, res, next) => {
         });
     }
 };
-
-const uri = process.env.DATABASE_URL;
-const client = new MongoClient(uri, {
-  serverApi: {
-    version: ServerApiVersion.v1,
-    strict: true,
-    deprecationErrors: true,
-  }
-});
-
-async function run() {
-  try {
-    await client.connect();
-    console.log("🔥 Successfully connected to MongoDB!");
-
-    const database = client.db("SwiftDrop");
-    const parcelCollection = database.collection("parcels");
-    const userCollection = database.collection("users");
-    const paymentCollection = database.collection("payments");
-    const ridersCollection = database.collection("riders");
-
-
     // users api
+    app.get('/users/:id',async(req,res)=>{
+        
+    })
+    app.get('/users/:email/role',async(req,res)=>{
+        const email = req.params.email;
+        const query = {email}
+        const user = await userCollection.findOne(query)
+        res.send({role:user?.role || 'user'})
+
+    })
 
     app.get('/users',verifyFBToken, async(req,res)=>{
-        const cursor = userCollection.find();
+        const cursor = userCollection.find().sort({createdAt:-1}).limit(5);
         const result = await cursor.toArray();
         res.send(result);
     })
@@ -108,6 +129,19 @@ async function run() {
        }
         const result = await userCollection.insertOne(user)
         res.send(result)
+    })
+    app.patch('/users/:id/role',verifyFBToken,verifyAdmin,async(req,res)=>{
+        const id = req.params.id;
+        const roleInfo = req.body;
+        const query = {_id:new ObjectId(id)}
+        const updatedDoc ={
+            $set:{
+                role:roleInfo.role
+            }
+        }
+        const result = await userCollection.updateOne(query,updatedDoc)
+        res.send(result);
+
     })
 
     // riders PI
@@ -139,7 +173,7 @@ app.get('/riders', async (req, res) => {
         const result = await cursor.toArray();
         res.send(result);
     });
-app.patch('/riders/:id', verifyFBToken, async (req, res) => {
+app.patch('/riders/:id', verifyFBToken,verifyAdmin, async (req, res) => {
     const status = req.body.status;
     const email = req.body.email; 
 

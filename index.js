@@ -174,9 +174,16 @@ app.get('/users', verifyFBToken, async (req, res) => {
     })
 
 app.get('/riders', async (req, res) => {
+        const {status,district,workingStatus}= req.query;
         const query = {};
         if (req.query.status) {
             query.status = req.query.status;
+        }
+        if(district){
+            query.district = district;
+        }
+        if(workingStatus){
+            query.workStatus = workingStatus;
         }
         
         const cursor = ridersCollection.find(query).sort({ _id: -1 });
@@ -192,7 +199,8 @@ app.patch('/riders/:id', verifyFBToken,verifyAdmin, async (req, res) => {
 
     const updatedDoc = {
         $set: {
-            status: status
+            status: status,
+            workStatus:'available'
         }
     };
 
@@ -216,7 +224,7 @@ app.patch('/riders/:id', verifyFBToken,verifyAdmin, async (req, res) => {
     
     app.get('/parcels', async (req, res) => {
         try {
-            const { email } = req.query;
+            const { email,deliveryStatus } = req.query;
             const query = {};
             if (email) {
                 query.$or = [
@@ -224,6 +232,10 @@ app.patch('/riders/:id', verifyFBToken,verifyAdmin, async (req, res) => {
                     { email: email }
                 ];
             }
+            if(deliveryStatus){
+                query.deliveryStatus = deliveryStatus
+            }
+
             const parcels = await parcelCollection.find(query).sort({ createdAt: -1 }).toArray();
             res.send(parcels);
         } catch (error) {
@@ -276,6 +288,31 @@ app.patch('/riders/:id', verifyFBToken,verifyAdmin, async (req, res) => {
             res.status(500).send({ error: "Failed to delete parcel" });
         }
     });
+    app.patch('/parcels/:id', async(req,res)=>{
+      const {riderId,riderName,riderEmail,riderPhone} = req.body  ;
+      const id = req.params.id;
+      const query ={_id:new ObjectId(id)}
+
+      const updatedDoc={
+        $set:{
+            deliveryStatus:'rider_assignED',
+            riderId:riderId,
+            riderEmail:riderEmail,
+            riderName:riderName,
+            riderPhone:riderPhone
+        }
+      }
+      const result= await parcelCollection.updateOne(query,updatedDoc)
+    //   update rider information
+    const riderQuery ={_id:new ObjectId(riderId)}
+    const riderUpatedDoc ={
+        $set:{
+            workStatus:"in_delivery"
+        }
+    }
+    const riderResult = await ridersCollection.updateOne(riderQuery,riderUpatedDoc);
+    res.send(riderResult)
+    })
 
     // ================= PAYMENT CHECKOUT SESSION API =================
     
@@ -365,6 +402,7 @@ app.patch('/payment-success', async (req, res) => {
                 const update = {
                     $set: {
                         paymentStatus: 'paid',
+                        deliveryStatus:'pending-pickup',
                         trackingId: trackingId
                     }
                 };

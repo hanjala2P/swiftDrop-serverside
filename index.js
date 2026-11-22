@@ -112,11 +112,21 @@ const verifyFBToken = async (req, res, next) => {
 
     })
 
-    app.get('/users',verifyFBToken, async(req,res)=>{
-        const cursor = userCollection.find().sort({createdAt:-1}).limit(5);
-        const result = await cursor.toArray();
-        res.send(result);
-    })
+app.get('/users', verifyFBToken, async (req, res) => {
+  const search = (req.query.search || '').trim();
+  const query = {};
+
+  if (search) {
+    query.$or = [
+      { displayName: { $regex: search, $options: 'i' } },
+      { email: { $regex: search, $options: 'i' } },
+    ];
+  }
+
+  const cursor = userCollection.find(query).sort({ createdAt: -1 }).limit(5);
+  const result = await cursor.toArray();
+  res.send(result);
+});
 
     app.post('/users',async(req,res)=>{
         const user = req.body;
